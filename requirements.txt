@@ -1,0 +1,9 @@
+python-telegram-bot 
+pymupdf 
+supabase 
+requests 
+python-dotenv
+numpy
+pytesseract 
+pillow
+langchain
