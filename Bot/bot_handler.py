@@ -1,270 +1,613 @@
 import os
 import logging
-import time
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    CallbackQueryHandler,
-)
-from telegram.error import TimedOut, BadRequest
-from data_processor import PDFProcessor
-from ai_integration import AcademicAssistant
+import telebot
+from telebot import types
+from typing import List, Dict, Any, Set, Optional
+from extract import process_documents, search_similar_chunks_sklearn
+from ai import answer_general_question, embed_question
+from constants import DOCUMENTS_FOLDER
 
 
 class BotHandler:
-    def __init__(self):
+    def __init__(self, bot=None):
+        """
+        Inicializa el manejador del bot con sus dependencias
+
+        Args:
+            bot: Instancia de TeleBot pasada desde main.py
+        """
         self._init_logging()
-        self._init_services()
+        self.bot = bot  # Recibe la instancia del bot desde main.py
+        self.processing_users = set()
+        print("hola")  # Controla usuarios con procesamiento activo
+        self._init_data()
 
     def _init_logging(self):
-        logging.basicConfig(
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            level=logging.INFO,
-        )
+        """Configura el logger para esta clase"""
         self.logger = logging.getLogger(__name__)
 
-    def _init_services(self):
-        self.pdf_processor = PDFProcessor(
-            base_dir="Libros",
-            hf_api_key=os.getenv("HF_API_KEY"),
-            supabase_url=os.getenv("SUPABASE_URL"),
-            supabase_key=os.getenv("SUPABASE_KEY"),
-        )
-        self.academic_bot = AcademicAssistant(os.getenv("HF_API_KEY"))
-
-    async def _send_adaptive_response(self, update: Update, respuesta: str):
-        """Envía respuestas largas en partes"""
-        keyboard = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("🧬 Bioinformática", callback_data="list_bio")],
-                [InlineKeyboardButton("💻 Programación", callback_data="list_prog")],
-            ]
-        )
-
-        if len(respuesta) > 4000:
-            parts = [respuesta[i : i + 4000] for i in range(0, len(respuesta), 4000)]
-            for part in parts[:-1]:
-                await update.message.reply_text(part, parse_mode="Markdown")
-            await update.message.reply_text(
-                parts[-1], reply_markup=keyboard, parse_mode="Markdown"
-            )
-        else:
-            await update.message.reply_text(
-                respuesta, reply_markup=keyboard, parse_mode="Markdown"
-            )
-
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Menú principal con manejo de timeout mejorado"""
+    def _init_data(self):
+        """Inicializa el acceso a los datos procesados"""
         try:
-            keyboard = [
-                [InlineKeyboardButton("🧬 Bioinformática", callback_data="list_bio")],
-                [InlineKeyboardButton("💻 Programación", callback_data="list_prog")]
-            ]
-            
-            # Mensaje simplificado para evitar timeout
-            await update.message.reply_text(
-                "📚 *Biblioteca Académica*\nElige una categoría:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
+            # Procesamiento de PDFs/vectores realizado solo una vez al inicio
+            self.index_model, self.chunks = process_documents()
+            if not self.index_model or not self.chunks:
+                self.logger.warning("No se pudieron cargar índices o documentos")
+        except Exception as e:
+            self.logger.error(f"Error inicializando datos: {str(e)}")
+            self.index_model = None
+            self.chunks = []
+
+    def process_all_pdfs(self):
+        """Procesa todos los PDFs para crear embeddings e índices"""
+        self.index_model, self.chunks = process_documents()
+        return bool(self.index_model and self.chunks)
+
+    def start(self, message_or_call):
+        """Maneja el comando start o callback"""
+        chat_id = (
+            message_or_call.chat.id
+            if hasattr(message_or_call, "chat")
+            else message_or_call.message.chat.id
+        )
+
+        keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        keyboard.add(
+            types.KeyboardButton("🧬 Bioinformática"),
+            types.KeyboardButton("💻 Programación"),
+        )
+        keyboard.add(
+            types.KeyboardButton("🔍 Búsqueda"), types.KeyboardButton("❓ Ayuda")
+        )
+
+        self.bot.send_message(
+            chat_id,
+            "📚 *Biblioteca Académica*\n"
+            "Puedo responder preguntas generales o buscar en documentos.\n\n"
+            "• `/ask` - Responde mediante IA\n"
+            "• `/search` - Muestra documentos relevantes",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    def handle_general_question(self, message):
+        """Maneja preguntas generales con la IA - SOLO CON /ask"""
+        question = message.text.replace("/ask ", "")
+        if not question or question == "/ask":
+            self.bot.send_message(
+                message.chat.id,
+                "❌ *Formato correcto:* `/ask [tu pregunta]`",
                 parse_mode="Markdown",
-                write_timeout=30,
-                connect_timeout=30
             )
-        except TimedOut:
-            self.logger.warning("Timeout en comando /start")
-            await update.message.reply_text("⌛ Sistema ocupado, intenta nuevamente")
+            return
 
+        user_id = message.from_user.id
+        if user_id in self.processing_users:
+            self.bot.send_message(
+                message.chat.id,
+                "⏳ Ya estoy procesando tu consulta anterior. Por favor espera...",
+            )
+            return
 
-    async def handle_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Maneja la selección de PDFs"""
-        query = update.callback_query
+        self.processing_users.add(user_id)
+        self.bot.send_chat_action(message.chat.id, "typing")
+
         try:
-            # Verificar timeout
-            if (time.time() - query.message.date.timestamp()) > 45:
-                await self._safe_answer_query(
-                    query, "⚠️ La operación expiró, usa el menú actual", show_alert=True
+            self.logger.info(f"Generando respuesta general para: {question[:50]}...")
+            respuesta = answer_general_question(question)
+
+            # Sanitizar la respuesta para evitar errores de formato
+            safe_response = sanitize_markdown(respuesta)
+
+            # Manejar respuestas que podrían dividirse en múltiples mensajes
+            if isinstance(safe_response, list):
+                for part in safe_response:
+                    self.bot.send_message(message.chat.id, part, parse_mode="Markdown")
+            else:
+                self.bot.send_message(
+                    message.chat.id, safe_response, parse_mode="Markdown"
+                )
+
+        except Exception as e:
+            self.logger.error(f"Error en handle_general_question: {str(e)}")
+            self.bot.send_message(
+                message.chat.id,
+                "❌ No pude generar una respuesta. Por favor, intenta reformular tu pregunta.",
+            )
+        finally:
+            self.processing_users.remove(user_id)
+
+    def handle_embedding_search(self, message):
+        """Busca documentos relevantes y genera respuesta basada en ellos"""
+        question = message.text.replace("/search ", "")
+        if not question or question == "/search":
+            self.bot.send_message(
+                message.chat.id, "❌ Formato correcto: /search [tu consulta]"
+            )
+            return
+
+        user_id = message.from_user.id
+        if user_id in self.processing_users:
+            self.bot.send_message(
+                message.chat.id,
+                "⏳ Ya estoy procesando tu consulta anterior. Por favor espera...",
+            )
+            return
+
+        self.processing_users.add(user_id)
+        self.bot.send_chat_action(message.chat.id, "typing")
+
+        try:
+            self.logger.info(f"Buscando documentos para: {question[:50]}...")
+
+            # Verificación de datos disponibles
+            if not self.index_model or not self.chunks:
+                self.bot.send_message(
+                    message.chat.id,
+                    "⚠️ No hay documentos procesados disponibles para búsqueda.",
                 )
                 return
 
-            await self._safe_answer_query(query)
-            folder_map = {
-                "list_bio": ("BIO", "Bioinformática"),
-                "list_prog": ("PRO", "Programación"),
-            }
-            folder, subject = folder_map[query.data]
-            pdfs = self.pdf_processor.list_pdfs(folder)
-
-            if not pdfs:
-                await query.edit_message_text(
-                    f"📂 *{subject}*\nNo hay PDFs disponibles."
+            # Generación de embedding para la búsqueda
+            question_embedding = embed_question(question)
+            if not question_embedding:
+                self.bot.send_message(
+                    message.chat.id,
+                    "❌ No pude procesar tu consulta. Intenta con otra pregunta.",
                 )
                 return
 
-            # Construir lista de botones
-            pdf_buttons = [
-                [
-                    InlineKeyboardButton(
-                        pdf, callback_data=f"download#{folder}#{pdf.replace('_', '∣')}"
+            # Búsqueda semántica de documentos relevantes
+            similar_chunks = search_similar_chunks_sklearn(
+                question_embedding, self.index_model, self.chunks, top_k=5
+            )
+
+            if not similar_chunks:
+                self.bot.send_message(
+                    message.chat.id,
+                    "❓ No encontré documentos relacionados con tu consulta.",
+                )
+                return
+
+            # Indicar al usuario que estamos generando la respuesta
+            self.bot.send_message(
+                message.chat.id,
+                "⏳ Generando respuesta basada en los documentos relevantes...",
+            )
+
+            # Generar respuesta usando los chunks encontrados
+            from ai import generate_answer
+
+            answer, references = generate_answer(question, similar_chunks, self.chunks)
+
+            # Enviar la respuesta principal (dividida si es necesaria)
+            if len(answer) > 4000:  # Cambiado de plain_answer a answer
+                chunks = [answer[i : i + 4000] for i in range(0, len(answer), 4000)]
+                for chunk in chunks:
+                    self.bot.send_message(message.chat.id, chunk)
+            else:
+                self.bot.send_message(
+                    message.chat.id, answer
+                )  # Cambiado de plain_answer a answer
+
+            # NUEVA IMPLEMENTACIÓN: Manejo mejorado de referencias
+            if similar_chunks:
+                # Diccionario para agrupar referencias por documento
+                doc_refs = {}  # {documento: set(páginas)}
+
+                # Extraer información única de documentos y páginas
+                for chunk in similar_chunks:
+                    doc_name = chunk.get("document", "")
+                    if not doc_name:
+                        continue
+
+                    # Convertir a nombre base del documento
+                    base_name = os.path.basename(doc_name)
+                    pretty_name = base_name.replace(".pdf", "").replace("_", " ")
+
+                    # Extraer páginas únicas
+                    pages = chunk.get("pages", [])
+
+                    # Agregar al diccionario, combinando las páginas si ya existe
+                    if pretty_name in doc_refs:
+                        doc_refs[pretty_name].update(pages)
+                    else:
+                        doc_refs[pretty_name] = set(pages)
+
+                # Crear mensaje de referencias
+                if doc_refs:
+                    ref_text = "📚 Referencias consultadas:\n\n"
+
+                    for doc_name, pages in doc_refs.items():
+                        # Ordenar páginas para presentación
+                        sorted_pages = sorted(pages)
+                        pages_str = (
+                            ", ".join(map(str, sorted_pages)) if sorted_pages else "N/A"
+                        )
+                        ref_text += f"• {doc_name} (Pág: {pages_str})\n"
+
+                    # Enviar mensaje con referencias únicas
+                    self.bot.send_message(message.chat.id, ref_text)
+
+                    # Crear botones de descarga (solo uno por documento)
+                    keyboard = types.InlineKeyboardMarkup()
+
+                    for doc_pretty_name in doc_refs.keys():
+                        # Buscar documento en sistema de archivos
+                        found = False
+                        for pdf_path in self.find_pdf_files(DOCUMENTS_FOLDER):
+                            base_name = os.path.basename(pdf_path)
+                            pdf_pretty_name = base_name.replace(".pdf", "").replace(
+                                "_", " "
+                            )
+
+                            if pdf_pretty_name == doc_pretty_name:
+                                # Encontramos el documento, crear botón de descarga
+                                rel_path = os.path.relpath(pdf_path, DOCUMENTS_FOLDER)
+                                keyboard.add(
+                                    types.InlineKeyboardButton(
+                                        f"📥 Descargar {doc_pretty_name}",
+                                        callback_data=f"download#{rel_path}",
+                                    )
+                                )
+                                found = True
+                                break
+
+                    # Enviar botones solo si hay documentos para descargar
+                    if keyboard.keyboard:
+                        self.bot.send_message(
+                            message.chat.id,
+                            "Selecciona un documento para descargar:",
+                            reply_markup=keyboard,
+                        )
+
+        except Exception as e:
+            self.logger.error(f"Error en handle_embedding_search: {str(e)}")
+            self.bot.send_message(message.chat.id, "❌ Error al procesar tu búsqueda.")
+        finally:
+            self.processing_users.remove(user_id)
+
+    def show_help(self, message_or_call):
+        """Muestra ayuda del bot"""
+        chat_id = (
+            message_or_call.chat.id
+            if hasattr(message_or_call, "chat")
+            else message_or_call.message.chat.id
+        )
+
+        help_text = (
+            "🤖 *Comandos disponibles:*\n\n"
+            "• `/start` - Inicia el bot\n"
+            "• `/ask [pregunta]` - Responde preguntas usando IA\n"
+            "• `/search [consulta]` - Responde preguntas usando documentos relevantes\n"
+            "• `/help` - Muestra esta ayuda\n\n"
+            "Usa `/ask` para preguntas generales y `/search` para encontrar documentos específicos."
+        )
+
+        keyboard = types.InlineKeyboardMarkup()
+        keyboard.add(
+            types.InlineKeyboardButton(
+                "🧬 Bioinformática", callback_data="list_bioinformatics"
+            )
+        )
+        keyboard.add(
+            types.InlineKeyboardButton(
+                "💻 Programación", callback_data="list_programming"
+            )
+        )
+
+        self.bot.send_message(
+            chat_id, help_text, reply_markup=keyboard, parse_mode="Markdown"
+        )
+
+    def handle_list(self, call):
+        """Maneja listados de documentos por categoría"""
+        category = call.data.replace("list_", "")
+        chat_id = call.message.chat.id
+
+        # Convertir categorías a nombres de carpetas
+        folder_mapping = {
+            "bioinformatics": "Bioinformatica",
+            "programming": "Programacion",
+        }
+
+        folder = folder_mapping.get(category)
+        if not folder:
+            self.bot.answer_callback_query(call.id, "Categoría no válida")
+            return
+
+        try:
+            folder_path = os.path.join(DOCUMENTS_FOLDER, folder)
+            if not os.path.exists(folder_path):
+                self.bot.send_message(chat_id, f"No se encontró la carpeta {folder}")
+                return
+
+            pdf_files = [
+                f for f in os.listdir(folder_path) if f.lower().endswith(".pdf")
+            ]
+
+            if not pdf_files:
+                self.bot.send_message(
+                    chat_id, f"No hay documentos disponibles en {folder}"
+                )
+                return
+
+            keyboard = types.InlineKeyboardMarkup()
+            for pdf in pdf_files[:10]:  # Limitamos a 10 resultados
+                # Usamos el nombre del archivo como texto del botón y la ruta en el callback
+                pretty_name = pdf.replace(".pdf", "").replace("_", " ")
+                keyboard.add(
+                    types.InlineKeyboardButton(
+                        pretty_name, callback_data=f"download#{folder}/{pdf}"
                     )
-                ]
-                for pdf in pdfs
-            ]
-            pdf_buttons.append(
-                [InlineKeyboardButton("↩️ Volver", callback_data="back_main")]
+                )
+            keyboard.add(
+                types.InlineKeyboardButton("⬅️ Volver", callback_data="back_main")
             )
 
-            await query.edit_message_text(
-                f"📂 *{subject}*\nSelecciona un PDF:",
-                reply_markup=InlineKeyboardMarkup(pdf_buttons),
+            self.bot.send_message(
+                chat_id,
+                f"📚 *Documentos disponibles en {folder}:*",
+                reply_markup=keyboard,
                 parse_mode="Markdown",
             )
-
         except Exception as e:
-            self.logger.error(f"Error en handle_list: {str(e)}")
-            await self._safe_answer_query(
-                query, "❌ Error al cargar documentos", show_alert=True
-            )
+            self.logger.error(f"Error listando PDFs: {e}")
+            self.bot.send_message(chat_id, "❌ Error al listar documentos")
 
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Manejo mejorado de mensajes con cascada de respuestas"""
-        await update.message.reply_chat_action("typing")
-        
+    def handle_pdf_download(self, call):
+        """Maneja la descarga de documentos PDF"""
+        chat_id = call.message.chat.id
+        path = call.data.replace("download#", "")
+
         try:
-            # Búsqueda semántica mejorada
-            context_chunks = self.pdf_processor.search_context(
-                question=update.message.text,
-                subject="",
-                folder="",
-                similarity_threshold=0.6,
-                top_k=5
-            )
-            
-            # Sistema de cascada inteligente
-            if context_chunks:
-                answer = self.academic_bot.generate_academic_answer(
-                    question=update.message.text,
-                    context_chunks=context_chunks
+            file_path = os.path.join(DOCUMENTS_FOLDER, path)
+            if not os.path.exists(file_path):
+                self.bot.send_message(chat_id, "❌ El archivo solicitado no existe")
+                return
+
+            with open(file_path, "rb") as pdf:
+                self.bot.send_document(chat_id, pdf)
+
+            self.logger.info(f"Enviado documento: {path}")
+        except Exception as e:
+            self.logger.error(f"Error enviando PDF: {e}")
+            self.bot.send_message(chat_id, "❌ Error al enviar el documento")
+
+    def handle_back(self, call):
+        """Maneja botones de regreso"""
+        if call.data == "back_main":
+            self.show_help(call)
+        else:
+            self.start(call)
+
+    def handle_message(self, message):
+        """Procesa mensajes de texto como consultas"""
+        text = message.text.lower()
+
+        # Responder a mensajes especiales del teclado
+        if text in ["🧬 bioinformática", "bioinformática", "bioinformatica"]:
+            keyboard = types.InlineKeyboardMarkup()
+            keyboard.add(
+                types.InlineKeyboardButton(
+                    "Ver documentos", callback_data="list_bioinformatics"
                 )
-            else:
-                answer = self.academic_bot.generate_general_answer(update.message.text)
-            
-            # Formateo adaptativo
-            await self._send_adaptive_response(update, answer)
-            
-        except Exception as e:
-            self.logger.error(f"Error: {str(e)}")
-            fallback = (
-                "⚠️ Sistema sobrecargado. Respuesta general:\n\n" +
-                self.academic_bot.generate_general_answer(update.message.text)
             )
-            await update.message.reply_text(fallback)
-
-    async def _safe_answer_query(self, query, text=None, show_alert=False):
-        """Manejo seguro de respuestas a queries"""
-        try:
-            await query.answer(text=text, show_alert=show_alert, timeout=10)
-        except BadRequest as e:
-            if "query id is invalid" in str(e):
-                self.logger.warning(f"Query expirada: {query.data}")
-            else:
-                self.logger.error(f"Error en query: {str(e)}")
-        except Exception as e:
-            self.logger.error(f"Error genérico en query: {str(e)}")
-
-    async def handle_pdf_download(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
-        """Envía el PDF seleccionado"""
-        query = update.callback_query
-        try:
-            _, folder, encoded_filename = query.data.split("#", 2)
-            filename = encoded_filename.replace("∣", "_")
-            file_path = os.path.join("Libros", folder, filename)
-
-            await context.bot.send_document(
-                chat_id=query.message.chat_id,
-                document=open(file_path, "rb"),
-                filename=filename,
-            )
-
-        except Exception as e:
-            self.logger.error(f"Error enviando PDF: {str(e)}")
-            await query.answer("❌ Error al enviar el PDF")
-
-    async def handle_back(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Vuelve al menú principal"""
-        query = update.callback_query
-        await query.answer()
-        simulated_update = Update(update.update_id, message=query.message)
-        await self.start(simulated_update, context)
-
-    async def handle_general_question(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
-        """Maneja /ask [pregunta]"""
-        question = " ".join(context.args)
-        if not question:
-            await update.message.reply_text("❌ Formato correcto: /ask [tu pregunta]")
-            return
-
-        await update.message.reply_chat_action("typing")
-        try:
-            respuesta = self.academic_bot.generate_general_answer(question)
-            await self._send_adaptive_response(update, respuesta)
-        except Exception as e:
-            await self._handle_error(update, e)
-
-    async def handle_embedding_search(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
-        """Maneja /search [pregunta]"""
-        question = " ".join(context.args)
-        if not question:
-            await update.message.reply_text(
-                "❌ Formato correcto: /search [tu consulta]"
+            self.bot.send_message(
+                message.chat.id,
+                "Selecciona una opción para Bioinformática:",
+                reply_markup=keyboard,
             )
             return
 
-        await update.message.reply_chat_action("typing")
-        try:
-            context_chunks = self.pdf_processor.search_context(
-                question=question, subject="", folder="", similarity_threshold=0.65
+        elif text in ["💻 programación", "programación", "programacion"]:
+            keyboard = types.InlineKeyboardMarkup()
+            keyboard.add(
+                types.InlineKeyboardButton(
+                    "Ver documentos", callback_data="list_programming"
+                )
             )
+            self.bot.send_message(
+                message.chat.id,
+                "Selecciona una opción para Programación:",
+                reply_markup=keyboard,
+            )
+            return
 
-            if context_chunks:
-                respuesta = self.academic_bot.generate_academic_answer(
-                    question, context_chunks
-                )
+        elif text in ["🔍 búsqueda", "búsqueda", "busqueda"]:
+            self.bot.send_message(
+                message.chat.id,
+                "Para buscar documentos, usa el comando `/search` seguido de tu consulta.\n"
+                "Ejemplo: `/search estructura del ADN`\n\n"
+                "Para preguntar a la IA, usa `/ask` seguido de tu pregunta.",
+            )
+            return
+
+        elif text in ["❓ ayuda", "ayuda", "help"]:
+            self.show_help(message)
+            return
+
+        # Los mensajes normales ahora piden al usuario especificar /ask o /search
+        self.bot.send_message(
+            message.chat.id,
+            "Por favor, especifica qué quieres hacer:\n\n"
+            "• `/ask " + text + "` - Para respuesta de IA\n"
+            "• `/search " + text + "` - Para buscar documentos relevantes",
+            parse_mode="Markdown",
+        )
+
+    def find_pdf_files(self, folder_path):
+        """
+        Busca archivos PDF en una carpeta y sus subcarpetas.
+
+        Args:
+            folder_path: Ruta de la carpeta donde buscar archivos PDF.
+
+        Returns:
+            Lista de rutas de archivos PDF encontrados.
+        """
+        pdf_files = []
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                if file.lower().endswith(".pdf"):
+                    pdf_files.append(os.path.join(root, file))
+        return pdf_files
+
+    def remove_markdown(self, text):
+        """
+        Elimina completamente el formato Markdown del texto.
+
+        Args:
+            text: Texto con posible formato Markdown
+
+        Returns:
+            Texto plano sin formato
+        """
+        import re
+
+        if not text:
+            return ""
+
+        # Eliminar bloques de código
+        text = re.sub(r"```[\s\S]*?```", "", text)
+
+        # Eliminar formato de negrita y cursiva
+        text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)  # Negrita
+        text = re.sub(r"\*(.*?)\*", r"\1", text)  # Cursiva con asteriscos
+        text = re.sub(r"_(.*?)_", r"\1", text)  # Cursiva con guiones bajos
+
+        # Eliminar enlaces, manteniendo el texto
+        text = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", text)
+
+        # Eliminar formato de listas
+        text = re.sub(r"^\s*[-*+]\s", "", text, flags=re.MULTILINE)
+        text = re.sub(r"^\s*\d+\.\s", "", text, flags=re.MULTILINE)
+
+        # Eliminar encabezados
+        text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+
+        # Eliminar comillas de código en línea
+        text = re.sub(r"`(.*?)`", r"\1", text)
+
+        return text
+
+
+def sanitize_markdown(text):
+    """
+    Limpia el texto para evitar errores de formato Markdown en Telegram.
+
+    Args:
+        text: Texto a limpiar
+
+    Returns:
+        Texto limpio con formato Markdown seguro
+    """
+    if not text:
+        return ""
+
+    # Lista de caracteres especiales de Markdown que pueden causar problemas
+    special_chars = [
+        "_",
+        "*",
+        "`",
+        "[",
+        "]",
+        "(",
+        ")",
+        "#",
+        "+",
+        "-",
+        "=",
+        "|",
+        "{",
+        "}",
+        ".",
+        "!",
+    ]
+
+    # Escapar los caracteres especiales que no formen parte de un formato válido
+    result = ""
+    i = 0
+    in_code_block = False
+    in_bold = False
+    in_italic = False
+    in_link = False
+
+    while i < len(text):
+        char = text[i]
+
+        # Manejo de bloques de código
+        if i < len(text) - 2 and text[i : i + 3] == "```":
+            in_code_block = not in_code_block
+            result += "```"
+            i += 3
+            continue
+
+        # Si estamos dentro de un bloque de código, añadir sin procesar
+        if in_code_block:
+            result += char
+            i += 1
+            continue
+
+        # Manejo de negrita
+        if i < len(text) - 1 and text[i : i + 2] == "**":
+            in_bold = not in_bold
+            result += "*"  # Telegram usa un solo asterisco para negrita
+            i += 2
+            continue
+
+        # Manejo de cursiva
+        if char == "_" or (char == "*" and i < len(text) - 1 and text[i + 1] != "*"):
+            in_italic = not in_italic
+            result += char
+            i += 1
+            continue
+
+        # Manejo de enlaces
+        if char == "[" and not in_link:
+            in_link = True
+            result += char
+            i += 1
+            continue
+        elif char == "]" and in_link and i < len(text) - 1 and text[i + 1] == "(":
+            in_link = False
+            result += char
+            i += 1
+            continue
+
+        # Escapar caracteres especiales que no son parte de formato
+        if char in special_chars and not (in_bold or in_italic or in_link):
+            result += "\\"
+
+        result += char
+        i += 1
+
+    # Arreglar formatos incompletos
+    if in_bold:
+        result += "*"
+    if in_italic:
+        result += "_"
+    if in_code_block:
+        result += "\n```"
+
+    # Dividir mensajes demasiado largos
+    if len(result) > 3500:  # Telegram tiene un límite de 4096, dejamos margen
+        parts = []
+        current_part = ""
+        paragraphs = result.split("\n\n")
+
+        for paragraph in paragraphs:
+            if len(current_part) + len(paragraph) + 2 > 3500:
+                parts.append(current_part)
+                current_part = paragraph
             else:
-                respuesta = (
-                    "🔍 No se encontraron coincidencias en los documentos.\n\n"
-                    + self.academic_bot.generate_general_answer(question)
-                )
+                if current_part:
+                    current_part += "\n\n"
+                current_part += paragraph
 
-            await self._send_adaptive_response(update, respuesta)
-        except Exception as e:
-            await self._handle_error(update, e)
+        if current_part:
+            parts.append(current_part)
 
-    async def show_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Muestra ayuda para comandos no reconocidos"""
-        await update.message.reply_text(
-            "ℹ️ Comandos disponibles:\n\n"
-            "*/ask* [pregunta] - Consulta general\n"
-            "*/search* [consulta] - Búsqueda en documentos\n"
-            "*/start* - Menú principal",
-            parse_mode="Markdown"
-        )
+        return parts
 
-    async def _handle_error(self, update: Update, error: Exception):
-        """Manejo centralizado de errores"""
-        self.logger.error(f"Error: {str(error)}")
-        error_message = (
-            "⚠️ Error procesando tu solicitud. Intenta:\n"
-            "- Reformular tu pregunta\n"
-            "- Verificar la ortografía\n"
-            "- Usar comandos específicos (/ask o /search)"
-        )
-        await update.message.reply_text(error_message)
+    return result
