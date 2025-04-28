@@ -1,3 +1,6 @@
 entorno
 .env
 Libros
+data
+logs
+

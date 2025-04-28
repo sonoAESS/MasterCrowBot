@@ -8,7 +8,7 @@ import numpy as np
 url = "https://api.fireworks.ai/inference/v1/embeddings"
 url_llm = "https://api.fireworks.ai/inference/v1/chat/completions"
 headers = {
-    "Authorization": f"Bearer {os.getenv('FIRE')}",
+    "Authorization": f'Bearer fw_3ZbneyZaTFytBHirqLphxtPi', #{os.getenv('FIRE')},
     "Content-Type": "application/json",
 }
 
@@ -46,6 +46,7 @@ def generate_embeddings(chunks: List[Dict[str, Any]]) -> None:
     start_time = time.time()
 
     for chunk in chunks:
+        #time.sleep(5)
         if "embedding" in chunk:
             continue  # Omitir chunks que ya tienen embedding
 

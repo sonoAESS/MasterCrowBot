@@ -307,8 +307,8 @@ class BotHandler:
 
         # Convertir categorías a nombres de carpetas
         folder_mapping = {
-            "bioinformatics": "Bioinformatica",
-            "programming": "Programacion",
+            "BIO": "Bioinformatica",
+            "PRO": "Programacion",
         }
 
         folder = folder_mapping.get(category)
