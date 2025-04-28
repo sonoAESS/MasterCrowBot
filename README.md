@@ -60,6 +60,7 @@ MASTERCR0W/
 - [ ] Módulo de análisis de secuencias con Biopython
 - [ ] Búsqueda federada en bases de datos biológicas
 - [ ] Visualización de estructuras proteicas
+- [ ] Informaciones de interés para la comunidad (guía a GitHub Students, cursos de Coursera, etc)
 
 ## Contribuir
 ¡Contribuciones son bienvenidas! Por favor:
