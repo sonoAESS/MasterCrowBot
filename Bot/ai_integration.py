@@ -7,8 +7,8 @@ from typing import List
 class AcademicAssistant:
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self.general_knowledge_model = "google/flan-t5-xxl"
-        self.academic_model = "google/flan-t5-xxl"
+        self.general_knowledge_model = "google/flan-t5-base"
+        self.academic_model = "google/flan-t5-base"
 
     def generate_general_answer(self, question: str) -> str:
         """Genera respuestas usando conocimiento general"""
@@ -94,7 +94,7 @@ class AcademicAssistant:
         for attempt in range(max_retries):
             try:
                 response = requests.post(
-                    "https://api-inference.huggingface.co/models/google/flan-t5-xxl",
+                    "https://api-inference.huggingface.co/models/google/flan-t5-base",
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     json={
                         "inputs": prompt,
