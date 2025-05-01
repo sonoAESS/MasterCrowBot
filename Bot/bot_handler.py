@@ -1,11 +1,13 @@
 import os
 import logging
 import telebot
+import time
 from telebot import types
 from typing import List, Dict, Any, Set, Optional
 from extract import process_documents, search_similar_chunks_sklearn
 from ai import answer_general_question, embed_question
 from constants import DOCUMENTS_FOLDER
+from scihub_handler import handle_scihub_command, process_doi_command
 
 
 class BotHandler:
@@ -59,19 +61,23 @@ class BotHandler:
         keyboard.add(
             types.KeyboardButton("🔍 Búsqueda"), types.KeyboardButton("❓ Ayuda")
         )
+        # Agrega aquí el botón de SciHub
+        keyboard.add(types.KeyboardButton("🔗 SciHub"))
 
         self.bot.send_message(
             chat_id,
             "📚 *Biblioteca Académica*\n"
             "Puedo responder preguntas generales o buscar en documentos.\n\n"
             "• `/ask` - Responde mediante IA\n"
-            "• `/search` - Muestra documentos relevantes",
+            "• `/search` - Muestra documentos relevantes\n"
+            "• Pulsa 🔗 SciHub para instrucciones de descarga de artículos",
             reply_markup=keyboard,
             parse_mode="Markdown",
         )
 
     def handle_general_question(self, message):
         """Maneja preguntas generales con la IA - SOLO CON /ask"""
+        start_time = time.perf_counter()
         question = message.text.replace("/ask ", "")
         if not question or question == "/ask":
             self.bot.send_message(
@@ -115,10 +121,15 @@ class BotHandler:
                 "❌ No pude generar una respuesta. Por favor, intenta reformular tu pregunta.",
             )
         finally:
+            elapsed = time.perf_counter() - start_time
+            self.logger.info(
+                f"Tiempo de respuesta de handle_general_question: {elapsed:.3f} segundos"
+            )
             self.processing_users.remove(user_id)
 
     def handle_embedding_search(self, message):
         """Busca documentos relevantes y genera respuesta basada en ellos"""
+        start_time = time.perf_counter()
         question = message.text.replace("/search ", "")
         if not question or question == "/search":
             self.bot.send_message(
@@ -265,6 +276,10 @@ class BotHandler:
             self.logger.error(f"Error en handle_embedding_search: {str(e)}")
             self.bot.send_message(message.chat.id, "❌ Error al procesar tu búsqueda.")
         finally:
+            elapsed = time.perf_counter() - start_time
+            self.logger.info(
+                f"Tiempo de respuesta de handle_embedding_search: {elapsed:.3f} segundos"
+            )
             self.processing_users.remove(user_id)
 
     def show_help(self, message_or_call):
@@ -382,11 +397,42 @@ class BotHandler:
             self.start(call)
 
     def handle_message(self, message):
-        """Procesa mensajes de texto como consultas"""
-        text = message.text.lower()
+        """Procesa mensajes de texto como consultas y comandos, incluyendo SciHub /doi."""
+
+        text = message.text.strip()
+
+        # Manejo comando /doi para SciHub
+        if text.lower().startswith("/doi"):
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2:
+                doi = parts[1].strip()
+                # Llama a la función que procesa el DOI (deberías implementarla en scihub_handler.py)
+                from scihub_handler import process_doi_command
+
+                process_doi_command(self.bot, message, doi)
+            else:
+                # Si solo se envió /doi sin DOI, envía mensaje de ayuda
+                from scihub_handler import handle_scihub_command
+
+                handle_scihub_command(self.bot, message)
+            return
+
+            # Manejo del comando /doi para SciHub
+
+        if text.lower().startswith("/doi"):
+            from scihub_handler import handle_scihub_command, process_doi_command
+
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2:
+                doi = parts[1].strip()
+                process_doi_command(self.bot, message, doi)
+            else:
+                handle_scihub_command(self.bot, message)
+            return
 
         # Responder a mensajes especiales del teclado
-        if text in ["🧬 bioinformática", "bioinformática", "bioinformatica"]:
+        text_lower = text.lower()
+        if text_lower in ["🧬 bioinformática", "bioinformática", "bioinformatica"]:
             keyboard = types.InlineKeyboardMarkup()
             keyboard.add(
                 types.InlineKeyboardButton(
@@ -400,7 +446,7 @@ class BotHandler:
             )
             return
 
-        elif text in ["💻 programación", "programación", "programacion"]:
+        elif text_lower in ["💻 programación", "programación", "programacion"]:
             keyboard = types.InlineKeyboardMarkup()
             keyboard.add(
                 types.InlineKeyboardButton(
@@ -414,25 +460,27 @@ class BotHandler:
             )
             return
 
-        elif text in ["🔍 búsqueda", "búsqueda", "busqueda"]:
+        elif text_lower in ["🔍 búsqueda", "búsqueda", "busqueda"]:
             self.bot.send_message(
                 message.chat.id,
                 "Para buscar documentos, usa el comando `/search` seguido de tu consulta.\n"
                 "Ejemplo: `/search estructura del ADN`\n\n"
                 "Para preguntar a la IA, usa `/ask` seguido de tu pregunta.",
+                parse_mode="Markdown",
             )
             return
 
-        elif text in ["❓ ayuda", "ayuda", "help"]:
+        elif text_lower in ["❓ ayuda", "ayuda", "help"]:
             self.show_help(message)
             return
 
-        # Los mensajes normales ahora piden al usuario especificar /ask o /search
+        # Mensajes normales: indicar comandos disponibles
         self.bot.send_message(
             message.chat.id,
             "Por favor, especifica qué quieres hacer:\n\n"
-            "• `/ask " + text + "` - Para respuesta de IA\n"
-            "• `/search " + text + "` - Para buscar documentos relevantes",
+            "• `/ask [tu pregunta]` - Para respuesta de IA\n"
+            "• `/search [tu consulta]` - Para buscar documentos relevantes\n"
+            "• `/doi [DOI]` - Para descargar artículos vía SciHub (ejemplo: `/doi 10.1038/s41586-020-2649-2`)",
             parse_mode="Markdown",
         )
 

@@ -54,6 +54,20 @@ def register_handlers(bot, bot_handler: BotHandler):
     def help_command(message):
         logger.info(f"Comando /help recibido de usuario {message.from_user.id}")
         bot_handler.show_help(message)
+    
+    @bot.message_handler(commands=["ask"])
+    def ask(message):
+        logger.info(
+            f"Comando /ask recibido de usuario {message.from_user.id}: '{message.text}'"
+        )
+        bot_handler.handle_general_question(message)
+
+    @bot.message_handler(commands=["doi"])
+    def doi(message):
+        logger.info(
+            f"Comando /doi recibido de usuario {message.from_user.id}: '{message.text}'"
+        )
+        bot_handler.handle_message(message)
 
     # Callbacks para interacciones con botones
     @bot.callback_query_handler(func=lambda call: call.data.startswith("list_"))
