@@ -4,10 +4,10 @@ import telebot
 import time
 from telebot import types
 from typing import List, Dict, Any, Set, Optional
-from extract import process_documents, search_similar_chunks_sklearn
-from ai import answer_general_question, embed_question
+from Bot.ai_embedding.extract import process_documents, search_similar_chunks_sklearn
+from Bot.ai_embedding.ai import answer_general_question, embed_question
 from constants import DOCUMENTS_FOLDER
-from scihub_handler import handle_scihub_command, process_doi_command
+from Bot.scihub.scihub_handler import handle_scihub_command, process_doi_command
 
 
 class BotHandler:
@@ -61,7 +61,6 @@ class BotHandler:
         keyboard.add(
             types.KeyboardButton("🔍 Búsqueda"), types.KeyboardButton("❓ Ayuda")
         )
-        # Agrega aquí el botón de SciHub
         keyboard.add(types.KeyboardButton("🔗 SciHub"))
 
         self.bot.send_message(
@@ -187,7 +186,7 @@ class BotHandler:
             )
 
             # Generar respuesta usando los chunks encontrados
-            from ai import generate_answer
+            from Bot.ai_embedding.ai import generate_answer
 
             answer, references = generate_answer(question, similar_chunks, self.chunks)
 
@@ -400,34 +399,23 @@ class BotHandler:
         """Procesa mensajes de texto como consultas y comandos, incluyendo SciHub /doi."""
 
         text = message.text.strip()
-
-        # Manejo comando /doi para SciHub
-        if text.lower().startswith("/doi"):
-            parts = text.split(maxsplit=1)
-            if len(parts) == 2:
-                doi = parts[1].strip()
-                # Llama a la función que procesa el DOI (deberías implementarla en scihub_handler.py)
-                from scihub_handler import process_doi_command
-
-                process_doi_command(self.bot, message, doi)
-            else:
-                # Si solo se envió /doi sin DOI, envía mensaje de ayuda
-                from scihub_handler import handle_scihub_command
-
-                handle_scihub_command(self.bot, message)
+        
+        # Si el usuario pulsa el botón de SciHub o escribe /scihub
+        if text.lower() == "🔗 scihub" or text.startswith("/scihub"):
+            self.logger.info(f"Comando SciHub recibido de usuario {message.from_user.id}: '{text}'")
+            handle_scihub_command(self.bot, message)
             return
 
-            # Manejo del comando /doi para SciHub
-
-        if text.lower().startswith("/doi"):
-            from scihub_handler import handle_scihub_command, process_doi_command
-
-            parts = text.split(maxsplit=1)
-            if len(parts) == 2:
-                doi = parts[1].strip()
-                process_doi_command(self.bot, message, doi)
-            else:
-                handle_scihub_command(self.bot, message)
+            # Si el usuario escribe /doi o /scihub seguido de un DOI o URL
+        if text.startswith("/doi") or text.startswith("/scihub "):
+            self.logger.info(f"Comando DOI/SciHub recibido de usuario {message.from_user.id}: '{text}'")
+            process_doi_command(self.bot, message)
+            return
+        
+        # Si el mensaje parece ser un DOI o URL de artículo
+        if self._is_probable_doi_or_url(text):
+            self.logger.info(f"Detección automática de DOI/URL de usuario {message.from_user.id}: '{text}'")
+            process_doi_command(self.bot, message)
             return
 
         # Responder a mensajes especiales del teclado
@@ -483,6 +471,13 @@ class BotHandler:
             "• `/doi [DOI]` - Para descargar artículos vía SciHub (ejemplo: `/doi 10.1038/s41586-020-2649-2`)",
             parse_mode="Markdown",
         )
+
+    def _is_probable_doi_or_url(self, text):
+            """Detecta si el texto es un DOI o URL de artículo científico"""
+            import re
+            doi_pattern = r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b"
+            url_pattern = r"(https?://[^\s]+)"
+            return bool(re.search(doi_pattern, text, re.I) or re.search(url_pattern, text, re.I))
 
     def find_pdf_files(self, folder_path):
         """
