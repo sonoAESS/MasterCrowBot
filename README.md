@@ -1,6 +1,6 @@
 # Proyecto MasterCrow - Asistente Educativo de Bioinformática en Telegram 🤖🧬
 
-Bot educativo especializado en bioinformática que utiliza embeddings y la API de Fireworks para búsquedas inteligentes y análisis de documentos científicos. Creado por el estudiante  de tercer año en Ingniería en Bioinformátca Antonio Elias Sánches Soto de la Universidad de Ciencias Informáticas y el estudiante de segundo año en Ciencias de Datos Alberto Enrique Marichal Fonseca de la Universidad de La Habana.
+Bot educativo especializado en bioinformática que utiliza embeddings y la API de Fireworks para búsquedas inteligentes y análisis de documentos científicos. Creado por el estudiante  de tercer año en Ingeniería en Bioinformátca Antonio Elias Sánches Soto de la Universidad de Ciencias Informáticas y el estudiante de segundo año en Ciencias de Datos Alberto Enrique Marichal Fonseca de la Universidad de La Habana.
 
 ## Características Principales
 - **Comando `/ask`**: Respuestas generales usando modelos de lenguaje

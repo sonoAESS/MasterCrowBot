@@ -6,7 +6,7 @@ import pickle
 import time
 from typing import List, Dict, Any, Optional, Tuple
 from logger import data_logger
-from Bot.ai_embedding.ai import generate_embeddings, embed_question
+from ai_embedding.ai import generate_embeddings, embed_question
 from constants import EMBEDDINGS_FILE, INDEX_FILE, DOCUMENTS_FOLDER
 
 

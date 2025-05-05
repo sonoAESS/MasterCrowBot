@@ -163,7 +163,8 @@ def generate_answer(
                 },
                 {"role": "user", "content": prompt, "name": "User"},
             ],
-            "temperature": 0.2,  # si lo bajas da mas Precisión
+            # si lo bajas da mas Precisión
+            "temperature": 0.2,  
             "max_tokens": 1500,
             "top_p": 0.9,
         }

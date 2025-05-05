@@ -1,5 +1,5 @@
 # scihub_handler.py
-from Bot.scihub.scihub import SciHubClient
+from scihub.scihub import SciHubClient
 import os
 
 scihub_client = SciHubClient()

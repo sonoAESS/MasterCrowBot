@@ -4,10 +4,10 @@ import telebot
 import time
 from telebot import types
 from typing import List, Dict, Any, Set, Optional
-from Bot.ai_embedding.extract import process_documents, search_similar_chunks_sklearn
-from Bot.ai_embedding.ai import answer_general_question, embed_question
+from ai_embedding.extract import process_documents, search_similar_chunks_sklearn
+from ai_embedding.ai import answer_general_question, embed_question
 from constants import DOCUMENTS_FOLDER
-from Bot.scihub.scihub_handler import handle_scihub_command, process_doi_command
+from scihub.scihub_handler import handle_scihub_command, process_doi_command
 
 
 class BotHandler:
@@ -186,7 +186,7 @@ class BotHandler:
             )
 
             # Generar respuesta usando los chunks encontrados
-            from Bot.ai_embedding.ai import generate_answer
+            from ai_embedding.ai import generate_answer
 
             answer, references = generate_answer(question, similar_chunks, self.chunks)
 
