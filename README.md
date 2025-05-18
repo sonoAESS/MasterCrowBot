@@ -38,6 +38,8 @@ Bot educativo especializado en bioinformática que utiliza embeddings y la API d
 | `/search`  | Búsqueda semántica en documentos     | `/search SNPs en genoma humano` |
 
 ## Estructura del Proyecto
+
+```
 MASTERCR0W/
 ├── Bot/
 │   ├── data/
@@ -54,6 +56,7 @@ MASTERCR0W/
 ├── .gitignore
 ├── README.md
 └── requirements.txt
+```
 
 ## Futuras Implementaciones
 - [ ] Integración con SciHub para descarga de papers
