@@ -269,14 +269,23 @@ def answer_general_question(pregunta: str) -> str:
     try:
 
         prompt = (
-            "Como experto en Bioinformática y Programación, responde de manera detallada pero concisa:\n"
-            f"Pregunta: {pregunta}\n\n"
-            "Incluye cuando sea relevante:\n"
+            "🧬 Como experto en Bioinformática y Programación, responde de manera detallada pero concisa:\n"
+            f"❓ Pregunta: {pregunta}\n\n"
+            "Cuando sea relevante, enriquece la respuesta incluyendo:\n"
             "- Explicaciones conceptuales\n"
             "- Contexto histórico\n"
-            "- Aplicaciones prácticas\n"
-            "Respuesta (formato markdown):"
+            "- Aplicaciones prácticas\n\n"
+            "- Si la respuesta incluye código, preséntalo en un bloque de código usando triple backticks (```)\n\n"
+            "Justo después de los backticks de apertura, indica el lenguaje de programación para que Telegram lo formatee correctamente.\n\n"
+            "Además, utiliza emojis para hacer la explicación más clara y amena, ayudando a destacar puntos importantes.\n\n"
+            "Por ejemplo:\n"
+            "```python\n"
+            "# tu código aquí\n"
+            "```\n"
+            "Respuesta:\n"
         )
+
+
 
         payload = {
             "model": "accounts/fireworks/models/llama-v3p3-70b-instruct",

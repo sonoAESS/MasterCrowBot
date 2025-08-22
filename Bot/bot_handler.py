@@ -1,14 +1,11 @@
 import os
 import logging
-import telebot
 import time
 from telebot import types
-from typing import List, Dict, Any, Set, Optional
 from ai_embedding.extract import process_documents, search_similar_chunks_sklearn
 from ai_embedding.ai import answer_general_question, embed_question
 from constants import DOCUMENTS_FOLDER
 from scihub.scihub_handler import handle_scihub_command, process_doi_command
-
 
 class BotHandler:
     def __init__(self, bot=None):
